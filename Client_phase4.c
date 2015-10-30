@@ -11,7 +11,9 @@
 #include<string.h>
 #include<stdlib.h>
 #include<windows.h>
+#include<time.h>
 #include"common_data.h"
+
  
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
  
@@ -35,6 +37,7 @@ int main(void)
 	int read_ret;
 	char prog_mode;
 	char intentional_corruption;
+	int dropped_prob;
 	int file_length_left;
 	int file_length;
 	int bytes_written = 0;
@@ -101,6 +104,8 @@ int main(void)
     si_other.sin_port = htons(PORT);
     si_other.sin_addr.S_un.S_addr = inet_addr(server);
 
+	//seed the random number generator
+	srand((int)time(NULL));
 
     //start communication
     while(1)
@@ -124,7 +129,8 @@ int main(void)
 
 		}
 
-
+		printf("Enter percentage of dropped packets <0-100>: ");
+		scanf( " %i", &dropped_prob);
 
 		//client will receive a file
 			if(prog_mode == 'n'){
@@ -271,6 +277,22 @@ int main(void)
 					//clear out the buffer each time to eliminate extraneous data on the last packet
 					memset(receive_data.data,0xFF, DATALEN);
 
+					
+					//randomly pull the waiting packet from the socket to simulate a lost data packet
+					if(dropped_prob > 0){
+
+						
+						random = rand() % 100;
+						
+
+						if(random < dropped_prob){
+							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+						}
+
+					}
+
+
+
 		
 					//listen for packet and store into data_packet struct
 
@@ -281,6 +303,7 @@ int main(void)
 					//intentionally corrupt data packet if user selected
 					if(intentional_corruption == 'B'){
 
+						
 						random = rand() % 100;
 						//randomly choose data packets and invalidate the sequence number
 
@@ -327,16 +350,38 @@ int main(void)
 					}
 					
 
-					//send the ACK packet to the client
-					if(sequence == 0){
-						printf("Sending ACK0 to client \n");
-						send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
-						
-					}else{
-						printf("Sending ACK1 to client \n");
-						send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
+					//randomly choose to send or not send the ACK to the server
+					if(dropped_prob > 0){
 
+						
+						random = rand() % 100;
+						printf("random = %i \n", random);
+
+						if(random >= dropped_prob){
+							//send the ACK packet to the server
+							if(sequence == 0){
+								printf("Sending ACK0 to server \n");
+								send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
+						
+							}else{
+								printf("Sending ACK1 to server \n");
+								send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
+
+							}
+						}
+
+					}else{
+						//send the ACK packet to the server
+						if(sequence == 0){
+								printf("Sending ACK0 to server \n");
+								send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
+						
+						}else{
+								printf("Sending ACK1 to server \n");
+								send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
+						}
 					}
+					
 
 
 
@@ -556,17 +601,38 @@ int main(void)
 			
 
 				
+					
+					//randomly choose to not send certain data packets to the server to simulate a dropped packet
+					if(dropped_prob > 0){
 
+						
+						random = rand() % 100;
 
-
-					//send the data_packet struct to the server
-
-					send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
-				
+						if(random >= dropped_prob){
+							//send the data_packet struct to the server
+							send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
+						}
+					}else{
+						//send the data_packet struct to the server
+						send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
+					}
+					
 
 	
-				
-				
+				//randomly pull the ACK packet off of the socket beforehand to simulate a dropped ACK
+					if(dropped_prob > 0){
+
+						
+						random = rand() % 100;
+						printf("random = %i \n", random);
+
+						if(random < dropped_prob){
+							
+							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+						}
+					}
+
+					
 					//look for ACK from the server
 
 					printf("waiting for ACK%i from server \n", sequence);

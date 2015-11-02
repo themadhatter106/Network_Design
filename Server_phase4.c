@@ -99,6 +99,12 @@ int main()
 
     //keep listening for data
     while(1){
+
+		if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout_0, sizeof(timeout_0)) == SOCKET_ERROR)
+	{
+		printf("setsockopt() failed with error code : %d" , WSAGetLastError());
+	}
+
     
        bytes_written = 0;
 	   packet_count = 0;

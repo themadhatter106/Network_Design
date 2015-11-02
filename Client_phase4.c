@@ -267,9 +267,9 @@ int main(void)
 
 						
 						random = rand() % 100;
-						if(random > dropped_prob)
-							printf("DROPPED DATA PACKET!\n");
+						
 						if(random <= dropped_prob){
+							printf("DROPPED DATA PACKET!\n");
 							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 						}
 

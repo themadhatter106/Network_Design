@@ -6,9 +6,14 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include<winsock2.h>
 
-#define PACKET_SIZE 512
-#define DATALEN PACKET_SIZE-8
+#define PACKET_SIZE 512			//Max length of buffer
+#define DATALEN PACKET_SIZE-8	//DATA length to fit structure data_packet in PACKET_SIZE bytes
+#define TIMEOUT_MS 1000;
+
+static int timeout = TIMEOUT_MS;
+static int timeout_0 = 0;
 
 // data structures for data transmission packet and header information packet
 
@@ -37,3 +42,6 @@ int corrupt_h(struct header_packet header);
 unsigned short header_CSI(struct header_packet header);
 unsigned short data_CSI(struct data_packet packet);
 unsigned short checksumAndInvert(char *data, int length);
+int isACK(struct data_packet ACK ,unsigned short sequence_number);
+int receive_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen);
+int send_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen);

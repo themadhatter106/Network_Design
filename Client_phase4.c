@@ -18,15 +18,9 @@
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
  
 #define SERVER "127.0.0.1"  //ip address of udp server
-#define PACKET_SIZE 512  //Max length of buffer
 #define PORT 8888   //The port on which to listen for incoming data
-#define DATALEN PACKET_SIZE-8 //DATA length to fit structure data_packet in PACKET_SIZE bytes
 #define CORRUPTION_PROB 40 //DATA and ACK Corruption percentage
 
-
-int isACK(struct data_packet ACK ,unsigned short sequence_number);
-int receive_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen);
-int send_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen);
 
 int main(void)
 {
@@ -49,7 +43,8 @@ int main(void)
 	int prev_sequence;
 	FILE* fp;
     WSADATA wsa;
-			
+	int recv_status;
+
 	//packet sent preceding the data containing information to initiate the file transfer
 	
 	
@@ -72,7 +67,6 @@ int main(void)
 	memset(ACK1.data,'+',DATALEN);
 	ACK1.sequence_number = 1;
 	ACK1.packet_number = -1;
-//	ACK1.checksum = checksumAndInvert(ACK1.data,DATALEN);
 	ACK1.checksum = data_CSI(ACK1);
 
 
@@ -135,6 +129,11 @@ int main(void)
 		//client will receive a file
 			if(prog_mode == 'n'){
 
+				if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout_0, sizeof(timeout_0)) == SOCKET_ERROR)
+				{
+					printf("setsockopt() failed with error code : %d" , WSAGetLastError());
+				}
+
 				printf("Enter file name to read on server : ");
 				scanf("%s",header.file_name);
 				printf("Enter file name to write on client : ");
@@ -153,7 +152,6 @@ int main(void)
 				header.packet_number = packet_count;
 				header.intentional_corruption = intentional_corruption;
 				header.checksum = 0;
-				printf("Computed = %d Checksum = %u\n", header_CSI(header), header.checksum);
 				header.checksum = header_CSI(header);
 
 
@@ -162,32 +160,19 @@ int main(void)
 				//mode dictates whether the server should send or receive
 				printf("mode = %c \n",header.mode);
 				printf("File name = %s \n\n",header.file_name);
-				printf("Computed = %d Checksum = %u\n", header_CSI(header), header.checksum);
 
-		
-				//send header packet asking to send file
+				do {
+					//send header packet asking to send file
 
-				send_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
-
-
-				//wait for ACK for header
-				printf("waiting for ACK from server \n");
-
-				receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
-					
-				
-				//in case of corrupt header packet or corrupt ACK 
-				while(corrupt(receive_data)||isACK(receive_data,prev_sequence)){
-						
-					//resend the header packet 
 					send_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
-						
-					//look for new ACK from the server
-						
-					receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
-						
-				}
 
+					//wait for ACK for header
+					printf("waiting for ACK from server \n");
+
+					//in case of corrupt header packet or corrupt ACK, repeat
+				} while(receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen) == -1 ||
+					corrupt(receive_data) || isACK(receive_data,prev_sequence));
+						
 				//notification for successful recepit of ACK
 				if(isACK(receive_data,sequence) == 1){
 
@@ -197,7 +182,6 @@ int main(void)
 
 					printf("ERROR: UNKNOWN DATA RECEIVED \n");
 				}
-
 
 
 				//wait for return header packet from server indicating the file size
@@ -283,9 +267,9 @@ int main(void)
 
 						
 						random = rand() % 100;
-						
-
-						if(random < dropped_prob){
+						if(random > dropped_prob)
+							printf("DROPPED DATA PACKET!\n");
+						if(random <= dropped_prob){
 							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 						}
 
@@ -317,6 +301,7 @@ int main(void)
 
 					while(corrupt(receive_data)||receive_data.sequence_number == prev_sequence){
 
+						
 						printf("CORRUPT OR WRONG SEQUENCE DATA PACKET RECEIVED \n");
 						printf("RESENDING PREVIOUS ACK \n\n");
 
@@ -341,7 +326,7 @@ int main(void)
 					//If the correct sequence data packet was sucessfully received
 					if(receive_data.sequence_number == sequence){
 
-						printf("received data%i from client \n", sequence);
+						printf("received data%i from server \n", sequence);
 
 					}else{
 
@@ -355,8 +340,9 @@ int main(void)
 
 						
 						random = rand() % 100;
-						printf("random = %i \n", random);
 
+						if(random< dropped_prob)
+							printf("DROPPED ACK PACKET!\n");
 						if(random >= dropped_prob){
 							//send the ACK packet to the server
 							if(sequence == 0){
@@ -476,7 +462,12 @@ int main(void)
 			//client will send a file
 			if(prog_mode == 'y'){
 
+				//set socket timeout
 
+				if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) == SOCKET_ERROR)
+				{
+					printf("setsockopt() failed with error code : %d" , WSAGetLastError());
+				}
 
 				// get file name to be sent from user
 
@@ -513,7 +504,6 @@ int main(void)
 				header.packet_number = packet_count;
 				header.intentional_corruption = intentional_corruption;
 				header.checksum = header_CSI(header);
-//				header.checksum = checksumAndInvert(header.file_name, sizeof(header.file_name));
 
 				printf("\n HEADER INFORMATION \n");
 				printf("packet number = %i \n",header.packet_number);
@@ -529,18 +519,18 @@ int main(void)
 				//wait for ACK for header
 				printf("waiting for ACK from server \n");
 
-				receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+				recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 					
 				
 				//in case of corrupt header packet or corrupt ACK 
-					while(corrupt(receive_data)||isACK(receive_data,prev_sequence)){
+					while(recv_status == -1 || corrupt(receive_data)||isACK(receive_data,prev_sequence)){
 						
 						//resend the header packet 
 						send_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
 						
 						//look for new ACK from the server
 						
-						receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+						recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 						
 					}
 
@@ -607,7 +597,8 @@ int main(void)
 
 						
 						random = rand() % 100;
-
+						if(random < dropped_prob) 
+							printf("DROPPED DATA PACKET! \n");
 						if(random >= dropped_prob){
 							//send the data_packet struct to the server
 							send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
@@ -624,10 +615,9 @@ int main(void)
 
 						
 						random = rand() % 100;
-						printf("random = %i \n", random);
 
 						if(random < dropped_prob){
-							
+							printf("DROPPED ACK PACKET!\n");
 							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 						}
 					}
@@ -637,7 +627,7 @@ int main(void)
 
 					printf("waiting for ACK%i from server \n", sequence);
 
-					receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+					recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 
 					
 					//intentionally corrupt the received ACK packet if user selected
@@ -652,12 +642,21 @@ int main(void)
 
 					}
 					
-					
+					printf("recv_status = %i \n", recv_status);
 					//if the ACK packet is corrupted or wrong sequence ACK is received
-					while(corrupt(receive_data)||isACK(receive_data,prev_sequence)){
+					while(recv_status == -1 || corrupt(receive_data)||isACK(receive_data,prev_sequence)){
 
+						
+						
+
+
+						if(recv_status == -1){
+							printf("TIMEOUT DETECTED: RESENDING PACKET\n");
+						}else{
+						
 						printf("CORRUPT OR WRONG SEQUENCE ACK PACKET RECEIVED \n");
 						printf("Resending Data packet \n \n");
+						}
 
 						//resend the data packet 
 						send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
@@ -667,7 +666,7 @@ int main(void)
 
 						printf("waiting for ACK%i from server \n", sequence);
 						
-						receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+						recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 						
 
 					}
@@ -713,51 +712,4 @@ int main(void)
     WSACleanup();
  
     return 0;
-}
-
-
-//send a packet stored at data of size "size"
-int send_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen){
-	
-	int send_len;
-
-	if (send_len=sendto(s, data, size, 0 , (struct sockaddr *) si_other, slen) == SOCKET_ERROR)
-		{
-			printf("sendto() failed with error code : %d" , WSAGetLastError());
-			exit(EXIT_FAILURE);
-		}
-
-
-
-	return send_len;
-
-
-}
-
-
-//receive a packet and store at data of size "size"
-int receive_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen){
-
-	int recv_len;
-
-	if ((recv_len=recvfrom(s, data, size, 0, (struct sockaddr *) si_other, &slen)) == SOCKET_ERROR)
-		{
-			printf("recvfrom() failed with error code : %d" , WSAGetLastError());
-			exit(EXIT_FAILURE);
-		}
-
-
-	return recv_len;
-}
-
-
-//returns 1 if the packet is an ACK with the specified sequence number
-int isACK(struct data_packet ACK ,unsigned short sequence_number){
-
-	if(ACK.packet_number == -1 && ACK.sequence_number == sequence_number){
-	return 1;
-	}else{
-	return 0;
-	}
-
 }

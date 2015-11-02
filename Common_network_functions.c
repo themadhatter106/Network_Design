@@ -11,7 +11,6 @@
 #include"common_data.h"
 
 
-
 // Function checks to see it the data packet is corrupted by computing
 // the checksum value and comparing it to the one in the packet
 
@@ -76,4 +75,47 @@ unsigned short checksumAndInvert(char *data, int numBytes)
 
 	// return inverted value for better error checking
 	return (~checksum);
+}
+
+// Function sends a packet of size slen at location data to a receiver socket
+
+int send_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen){
+	
+	int send_len;
+
+	if (send_len=sendto(s, data, size, 0 , (struct sockaddr *) si_other, slen) == SOCKET_ERROR)
+		{
+			printf("sendto() failed with error code : %d" , WSAGetLastError());
+			exit(EXIT_FAILURE);
+		}
+
+	return send_len;
+}
+
+// Function receives a packet of size slen into location data from a sender socket
+
+int receive_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, int slen){
+
+	int recv_len;
+
+	
+	if ((recv_len=recvfrom(s, data, size, 0, (struct sockaddr *) si_other, &slen)) == SOCKET_ERROR
+		&& WSAGetLastError() != WSAETIMEDOUT)
+	{
+		printf("recvfrom() failed with error code : %d" , WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+
+	return recv_len;
+}
+
+//returns 1 if the packet is an ACK with the specified sequence number
+int isACK(struct data_packet ACK ,unsigned short sequence_number){
+
+	if(ACK.packet_number == -1 && ACK.sequence_number == sequence_number){
+	return 1;
+	}else{
+	return 0;
+	}
+
 }

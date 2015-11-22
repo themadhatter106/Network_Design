@@ -10,9 +10,7 @@
 
 #define PACKET_SIZE 512			//Max length of buffer
 #define DATALEN PACKET_SIZE-8	//DATA length to fit structure data_packet in PACKET_SIZE bytes
-#define TIMEOUT_MS 1000;
-
-static int timeout = TIMEOUT_MS;
+static int timeout_1 = 1;
 static int timeout_0 = 0;
 
 // data structures for data transmission packet and header information packet
@@ -21,7 +19,6 @@ struct data_packet
 {
 	int packet_number;
 	char data[DATALEN];
-	unsigned short sequence_number;
 	unsigned short checksum;
 };
 
@@ -31,8 +28,10 @@ struct header_packet
 	int file_size;
 	char mode;
 	char file_name[30];
-	unsigned short sequence_number;
 	char intentional_corruption;
+	int corruption;
+	float timer;
+	int window;
 	unsigned short checksum;
 };
 

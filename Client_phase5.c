@@ -19,7 +19,7 @@
  
 #define SERVER "127.0.0.1"  //ip address of udp server
 #define PORT 8888   //The port on which to listen for incoming data
-#define CORRUPTION_PROB 40 //DATA and ACK Corruption percentage
+
 
 
 int main(void)
@@ -37,39 +37,42 @@ int main(void)
 	int bytes_written = 0;
 	int packet_count;
 	int r,c,i,j;
-	int random;
-	char **data_storage;
 	int sequence;
-	int prev_sequence;
+	int GBN_lower;
+	int GBN_upper;
+	int *timers;
+	float timeout;
+	int start_time;
+	int timeout_indicator;
+	int no_ACK_indicator;
+	int dropped_count;
+	int random;
+	int previous_ack;
+	int corrupt_status;
+	char **data_storage;
+	int CORRUPTION_PROB = 0;
 	FILE* fp;
     WSADATA wsa;
 	int recv_status;
 	int window_size;
-	struct data_packet* GBN_window;
+	struct data_packet* send_packets;
 
 	//packet sent preceding the data containing information to initiate the file transfer
 	
 	
-
+	struct data_packet temp;
 	struct data_packet send_data;
 	struct data_packet receive_data;
-	struct data_packet ACK0;
-	struct data_packet ACK1;
+	struct data_packet ACK;
 	struct header_packet header;
 
-	//initalize ACK0
+	//initalize ACK
 
-	memset(ACK0.data,'+',DATALEN);
-	ACK0.sequence_number = 0;
-	ACK0.packet_number = -1;
-	ACK0.checksum = data_CSI(ACK0);
+	memset(ACK.data,'+',DATALEN);
+	ACK.packet_number = 0;
+	ACK.checksum = data_CSI(ACK);
 
-	//initalize ACK1
-
-	memset(ACK1.data,'+',DATALEN);
-	ACK1.sequence_number = 1;
-	ACK1.packet_number = -1;
-	ACK1.checksum = data_CSI(ACK1);
+	
 
 
 	//Initialise winsock
@@ -109,7 +112,7 @@ int main(void)
 		bytes_written = 0;
 		packet_count = 0;
 		sequence = 0;
-		prev_sequence = 1;
+		timeout_indicator = 0;
 
 
 		printf("Do you want to send a file? <y/n>: ");
@@ -122,6 +125,8 @@ int main(void)
 			printf("Options: \nACK packet bit-error = A\nData packet bit-error = B \n");
 			printf("Please enter your selection <A/B>: ");
 			scanf(" %c", &intentional_corruption);
+			printf("Enter Corruption Probability <0-100>: ");
+			scanf(" %i", &CORRUPTION_PROB);
 
 		}
 
@@ -131,8 +136,11 @@ int main(void)
 		printf("Enter GBN window size: ");
 		scanf(" %i", &window_size);
 
+		printf("Enter timeout in Seconds: ");
+		scanf(" %f", &timeout);
 
 
+		start_time = clock();
 
 		//client will receive a file
 			if(prog_mode == 'n'){
@@ -159,6 +167,9 @@ int main(void)
 				header.mode = 'n';
 				header.packet_number = packet_count;
 				header.intentional_corruption = intentional_corruption;
+				header.window = window_size;
+				header.timer = timeout;
+				header.corruption = CORRUPTION_PROB;
 				header.checksum = 0;
 				header.checksum = header_CSI(header);
 
@@ -179,10 +190,10 @@ int main(void)
 
 					//in case of corrupt header packet or corrupt ACK, repeat
 				} while(receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen) == -1 ||
-					corrupt(receive_data) || isACK(receive_data,prev_sequence));
+					corrupt(receive_data) || !isACK(receive_data,sequence));
 						
 				//notification for successful recepit of ACK
-				if(isACK(receive_data,sequence) == 1){
+				if(isACK(receive_data, sequence) == 1){
 
 					printf("received ACK for header packet from server \n");
 
@@ -194,27 +205,26 @@ int main(void)
 
 				//wait for return header packet from server indicating the file size
 
-				printf("Waiting for header packet from server...\n");
+				printf("get header packet from server...\n");
 	
 				//get header packet from socket
 				receive_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
 
 				
-				//if header packet is corrupt send the previous sequence number ACK
+				//if header packet is corrupt do nothing and wait for a new packet
 		
 				while(corrupt_h(header) == 1){
-					//resend the prev_sequence ACK packet
-					send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
 
 					//get a new header packet
 					receive_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
 				}
 	
+
 				//send ack
 				printf("sending header acknowledgement \n");
-				send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
-
-
+				ACK.packet_number = sequence;
+				ACK.checksum = data_CSI(ACK);
+				send_packet((char*)&ACK,sizeof(struct data_packet),s,&si_other,slen);
 
 
 
@@ -266,6 +276,8 @@ int main(void)
 
 				while(bytes_written < header.file_size){
 
+					sequence++;
+
 					//clear out the buffer each time to eliminate extraneous data on the last packet
 					memset(receive_data.data,0xFF, DATALEN);
 
@@ -278,7 +290,10 @@ int main(void)
 						
 						if(random <= dropped_prob){
 							printf("DROPPED DATA PACKET!\n");
+							temp = receive_data;
 							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+							receive_data = temp;
+
 						}
 
 					}
@@ -300,29 +315,27 @@ int main(void)
 						//randomly choose data packets and invalidate the sequence number
 
 						if(random < CORRUPTION_PROB){
-							receive_data.sequence_number = 49;
+							receive_data.packet_number = 0;
 						}
 
 					}
 
-					//if data is corrupt or has the wrong sequence number
+					//if data is corrupt or has some sequence number other than expected resend previous ACK
 
-					while(corrupt(receive_data)||receive_data.sequence_number == prev_sequence){
-
-						
-						printf("CORRUPT OR WRONG SEQUENCE DATA PACKET RECEIVED \n");
-						printf("RESENDING PREVIOUS ACK \n\n");
-
-						//resend the prev_sequence ACK packet 
+					while(corrupt(receive_data)||receive_data.packet_number != sequence){
 
 						
-						if(prev_sequence == 0){
-							send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
+						printf("CORRUPT OR WRONG SEQUENCE DATA PACKET RECEIVED, packet = %i, sequence = %i \n",receive_data.packet_number,sequence);
+						printf("RESENDING ACK FOR LAST PACKET \n\n");
 
-						}else{
-							send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
 
-						}
+						ACK.packet_number = sequence-1;
+						ACK.checksum = data_CSI(ACK);
+						printf("Sending ACK %i to client \n", sequence-1);
+						send_packet((char*)&ACK,sizeof(struct data_packet),s,&si_other,slen);
+
+
+						
 
 
 						//look for new data from client
@@ -332,7 +345,7 @@ int main(void)
 
 
 					//If the correct sequence data packet was sucessfully received
-					if(receive_data.sequence_number == sequence){
+					if(receive_data.packet_number == sequence){
 
 						printf("received data%i from server \n", sequence);
 
@@ -353,27 +366,20 @@ int main(void)
 							printf("DROPPED ACK PACKET!\n");
 						if(random >= dropped_prob){
 							//send the ACK packet to the server
-							if(sequence == 0){
-								printf("Sending ACK0 to server \n");
-								send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
-						
-							}else{
-								printf("Sending ACK1 to server \n");
-								send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
+							
+								printf("Sending ACK %i to server \n", sequence);
+								ACK.packet_number = sequence;
+								ACK.checksum = data_CSI(ACK);
+								send_packet((char*)&ACK,sizeof(struct data_packet),s,&si_other,slen);
 
-							}
 						}
 
 					}else{
 						//send the ACK packet to the server
-						if(sequence == 0){
-								printf("Sending ACK0 to server \n");
-								send_packet((char*)&ACK0,sizeof(struct data_packet),s,&si_other,slen);
-						
-						}else{
-								printf("Sending ACK1 to server \n");
-								send_packet((char*)&ACK1,sizeof(struct data_packet),s,&si_other,slen);
-						}
+						printf("Sending ACK %i to server \n", sequence);
+						ACK.packet_number = sequence;
+						ACK.checksum = data_CSI(ACK);
+						send_packet((char*)&ACK,sizeof(struct data_packet),s,&si_other,slen);
 					}
 					
 
@@ -393,14 +399,9 @@ int main(void)
 
 
 
-					prev_sequence=sequence;
-					sequence++;
+					
 
-					//when sequence number 1 is done go back to sequence number 0
-					if(sequence > 1){
-
-						sequence = 0;
-					}
+					
 	
 
 
@@ -470,22 +471,19 @@ int main(void)
 			//client will send a file
 			if(prog_mode == 'y'){
 
-				//make GBN window buffer to hold packets which have not been ACKd
-
-				GBN_window = (struct data_packet*)malloc(window_size * sizeof(struct data_packet));
+				
 
 
 
 
 				//set socket timeout
 
-				if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) == SOCKET_ERROR)
+				if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout_1, sizeof(timeout_1)) == SOCKET_ERROR)
 				{
 					printf("setsockopt() failed with error code : %d" , WSAGetLastError());
 				}
 
 				// get file name to be sent from user
-
 
 
 				printf("Enter file name to read on client : ");
@@ -518,6 +516,7 @@ int main(void)
 				header.mode = 'y';
 				header.packet_number = packet_count;
 				header.intentional_corruption = intentional_corruption;
+				header.corruption = CORRUPTION_PROB;
 				header.checksum = header_CSI(header);
 
 				printf("\n HEADER INFORMATION \n");
@@ -532,13 +531,13 @@ int main(void)
 				send_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
 
 				//wait for ACK for header
-				printf("waiting for ACK from server \n");
+				printf("looking for ACK from server \n");
 
 				recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
 					
 				
 				//in case of corrupt header packet or corrupt ACK 
-					while(recv_status == -1 || corrupt(receive_data)||isACK(receive_data,prev_sequence)){
+					while(recv_status == -1 || corrupt(receive_data)||!isACK(receive_data,packet_count)){
 						
 						//resend the header packet 
 						send_packet((char*)&header,sizeof(struct header_packet),s,&si_other,slen);
@@ -550,7 +549,7 @@ int main(void)
 					}
 
 					//notification for successful recepit of ACK
-					if(isACK(receive_data,sequence) == 1){
+					if(isACK(receive_data,packet_count) == 1){
 
 						printf("received ACK for header packet from server \n");
 
@@ -561,9 +560,23 @@ int main(void)
 
 
 
+					//calculate number of spaces in array needed to hold all the data packets
+
+					r = ((header.file_size-(header.file_size%(DATALEN)))/(DATALEN));
+			
+					if((header.file_size%DATALEN)!=0){
+					r++;
+					}
 
 
+					//make array to hold all the data packets
 
+				send_packets = (struct data_packet*)malloc(r * sizeof(struct data_packet));
+				timers = (int*)malloc(r * sizeof(int));
+
+				GBN_lower = 0;
+				
+		
 
 
 				//break up message into chunks for UDP packets
@@ -588,8 +601,6 @@ int main(void)
 			
 			
 
-					//insert sequence number
-					send_data.sequence_number = sequence;
 
 					//compute and store checksum into packet
 					send_data.checksum = data_CSI(send_data);
@@ -605,120 +616,236 @@ int main(void)
 					}
 			
 
+					send_packets[GBN_lower] = send_data;
 				
+					GBN_lower++;
+
+				}
+
+				packet_count = 1;
+
+
+				//keep sending data until the last ACK is received from the server
+				while( receive_data.packet_number != r ){
+
+		
+
+					if(packet_count == 1){
+						
+						GBN_lower = 1;
+						GBN_upper = window_size;
+						printf("Initalized...GBN_lower = %i and GBN_upper = %i \n", GBN_lower, GBN_upper);
+					}
+
+
+
+					while(packet_count <= GBN_upper){
+
+						send_data = send_packets[packet_count - 1];
+
+						printf("Sending Packet %i \n", packet_count);
 					
-					//randomly choose to not send certain data packets to the server to simulate a dropped packet
-					if(dropped_prob > 0){
+					
+						//randomly choose to not send certain data packets to the server to simulate a dropped packet
+						if(dropped_prob > 0){
 
 						
-						random = rand() % 100;
-						if(random < dropped_prob) 
-							printf("DROPPED DATA PACKET! \n");
-						if(random >= dropped_prob){
+							random = rand() % 100;
+							if(random < dropped_prob) 
+								printf("DROPPED DATA PACKET! \n");
+							if(random >= dropped_prob){
+								//send the data_packet struct to the server
+								send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
+							}
+						}else{
 							//send the data_packet struct to the server
 							send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
 						}
-					}else{
-						//send the data_packet struct to the server
-						send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
-					}
-					
 
+						timers[packet_count - 1] = (int)clock();
+
+						
+						
+						packet_count++;
+
+						
+					}
+
+					
 	
-				//randomly pull the ACK packet off of the socket beforehand to simulate a dropped ACK
-					if(dropped_prob > 0){
 
-						
-						random = rand() % 100;
 
-						if(random < dropped_prob){
-							printf("DROPPED ACK PACKET!\n");
-							receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+					
+
+					
+					//check to see if any of the timers have expired
+					for(i=GBN_lower; i<=GBN_upper; i++){
+						if( (clock() - timers[i-1]) > timeout*CLOCKS_PER_SEC ){
+							printf("TIMEOUT DETECTED on packet %i, time = %f \n", i,(float)(clock() - timers[i-1])/(float)CLOCKS_PER_SEC);
+							timeout_indicator = 1;
 						}
 					}
-
 					
-					//look for ACK from the server
+					//if the ACK packet is corrupted throw packet away and get new one from socket
+					//if the timer for a certain ACK expires resend whole window
 
-					printf("waiting for ACK%i from server \n", sequence);
 
-					recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+						if(timeout_indicator == 1){
+							printf("TIMEOUT DETECTED: RESENDING WINDOW\n");
 
+							packet_count = GBN_lower;
+
+
+							while(packet_count <= GBN_upper){
+
+								send_data = send_packets[packet_count - 1];
+
+
+								printf("Timeout: Sending Packet %i \n", packet_count);
 					
-					//intentionally corrupt the received ACK packet if user selected
-					if(intentional_corruption == 'A'){
+								//randomly choose to not send certain data packets to the server to simulate a dropped packet
+								if(dropped_prob > 0){
 
-						random = rand() % 100;
-						//randomly choose ACK packets and invalidate the sequence number
+						
+									random = rand() % 100;
+									if(random < dropped_prob) 
+										printf("DROPPED DATA PACKET! \n");
+									if(random >= dropped_prob){
+										//send the data_packet struct to the server
+										send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
+									}
+								}else{
+									//send the data_packet struct to the server
+									send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
+								}
 
-						if(random <= CORRUPTION_PROB){
-						receive_data.sequence_number = 69;
+								timers[packet_count - 1] = (int)clock();
+
+								packet_count++;
+
+								
+							}
+
+
+
 						}
 
-					}
-					
-					printf("recv_status = %i \n", recv_status);
-					//if the ACK packet is corrupted or wrong sequence ACK is received
-					while(recv_status == -1 || corrupt(receive_data)||isACK(receive_data,prev_sequence)){
 
+
+
+					timeout_indicator = 0;
+
+
+						recv_status=0;
+						i=0;
+						
+						//pull as many ACKs off of the socket as possible and process
+					while(recv_status != -1){
 						
 						
 
-
-						if(recv_status == -1){
-							printf("TIMEOUT DETECTED: RESENDING PACKET\n");
-						}else{
 						
-						printf("CORRUPT OR WRONG SEQUENCE ACK PACKET RECEIVED \n");
-						printf("Resending Data packet \n \n");
+					//randomly pull the new ack and change the packet number to the previous one to simulate a dropped ACK
+						if(dropped_prob > 0 && dropped_count == 0){
+
+						
+							random = rand() % 100;
+							
+
+							if(random < dropped_prob){
+								printf("DROPPED ACK PACKET!\n");
+								receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+								receive_data.packet_number--;
+								receive_data.checksum = data_CSI(receive_data);
+								dropped_count++;
+							}
+
 						}
 
-						//resend the data packet 
-						send_packet((char*)&send_data,sizeof(struct data_packet),s,&si_other,slen);
-						
 
-						//look for new ACK from the server
-
-						printf("waiting for ACK%i from server \n", sequence);
-						
+						//look for ACK from the server
 						recv_status = receive_packet((char*)&receive_data,sizeof(struct data_packet),s,&si_other,slen);
+
+					
+					
+
+						//intentionally corrupt the received ACK packet if user selected
+						if(intentional_corruption == 'A'){
+
+							random = rand() % 100;
+							//randomly choose ACK packets and invalidate the sequence number
+
+							if(random <= CORRUPTION_PROB && receive_data.packet_number != GBN_upper){
+							receive_data.packet_number = 0;
+							}
+
+						}
+
+						if(recv_status == -1 && i == 0 && corrupt_status < 2 && no_ACK_indicator < 1 ){
+							printf("received no ACK from the server \n");
+							no_ACK_indicator++;
+						}
+						
+						if(recv_status > 0){
+							printf("received ACK%i from server \n", receive_data.packet_number);
+						}
+
 						
 
+						if(corrupt(receive_data)){
+							
+							
+							if(corrupt_status == 0){
+							printf("CORRUPT ACK PACKET RECEIVED \n");
+							printf("corrupt = %i, sequence = %i \n", corrupt(receive_data), receive_data.packet_number);
+							printf("Threw away, looking for new ACK packet \n");
+							}
+						
+							
+
+							corrupt_status++;
+
+						}
+
+
+							//ACK all packets equal to and less than the ACK# (cumulative ACK)
+							//and don't slide the window longer than the bytes in the file
+						if( receive_data.packet_number >= GBN_lower && GBN_upper < r){
+
+							GBN_lower = receive_data.packet_number+1;
+							GBN_upper = GBN_lower+(window_size-1);
+
+							if(GBN_upper > r){
+								GBN_upper = r;
+							}
+							printf(" GBN_lower = %i, GBN_upper = %i \n", GBN_lower, GBN_upper);
+						
+							corrupt_status = 0;
+							no_ACK_indicator = 0;
+							dropped_count = 0;
+						}
+						
+						i++;
+
 					}
 
-
-					//If the correct ACK was sucessfully received
-					if(isACK(receive_data,sequence) == 1){
-
-						printf("received ACK%i from server \n", sequence);
-
-					}else{
-
-
-						printf("ERROR: UNKNOWN DATA RECEIVED \n");
-					}
+					if(corrupt_status < 2 && no_ACK_indicator < 1)
+						printf("\n\n\n\n");
 
 
 
-
-						prev_sequence=sequence;
-						sequence++;
-
-					//when sequence number 1 is done go back to sequence number 0
-					if(sequence > 1){
-
-						sequence = 0;
-					}
+						
 
 				}
 
 			fclose(fp);
+			free(timers);
+			free(send_packets);
+
+			printf("The transfer took %f seconds \n", (float)(clock()-start_time)/(float)CLOCKS_PER_SEC);
 			
-			//dealocate the packet window buffer
-			free(GBN_window);
-
+			
 			}
-
 
 		
 

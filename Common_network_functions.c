@@ -16,13 +16,16 @@
 
 int corrupt(struct data_packet packet)
 {
-	if (data_CSI(packet) == packet.checksum)
+
+	if (data_CSI(packet) == packet.checksum){
 		return 0;
-	else
+	}
+	else{
 		return 1;
+	}
 }
 
-// Function checks to see it the header packet is corrupted by computing
+// Function checks to see if the header packet is corrupted by computing
 // the checksum value and comparing it to the one in the packet
 
 int corrupt_h(struct header_packet header)
@@ -111,8 +114,12 @@ int receive_packet(char* data,int size,SOCKET s,struct sockaddr_in* si_other, in
 
 //returns 1 if the packet is an ACK with the specified sequence number
 int isACK(struct data_packet ACK ,unsigned short sequence_number){
+	
+	//make DATALEN of '+' for comparison to determine if the packet is an ACK
+	char ACK_data[DATALEN];
+	memset(ACK_data, '+', DATALEN);
 
-	if(ACK.packet_number == -1 && ACK.sequence_number == sequence_number){
+	if(memcmp(ACK.data, ACK_data, DATALEN) == 0 && ACK.packet_number == sequence_number){
 	return 1;
 	}else{
 	return 0;

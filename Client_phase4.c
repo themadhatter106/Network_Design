@@ -41,9 +41,11 @@ int main(void)
 	char **data_storage;
 	int sequence;
 	int prev_sequence;
+	int start_time;
 	FILE* fp;
     WSADATA wsa;
 	int recv_status;
+	int timeout;
 
 	//packet sent preceding the data containing information to initiate the file transfer
 	
@@ -54,6 +56,8 @@ int main(void)
 	struct data_packet ACK0;
 	struct data_packet ACK1;
 	struct header_packet header;
+
+	timeout = 1;
 
 	//initalize ACK0
 
@@ -125,6 +129,8 @@ int main(void)
 
 		printf("Enter percentage of dropped packets <0-100>: ");
 		scanf( " %i", &dropped_prob);
+
+		start_time = clock();
 
 		//client will receive a file
 			if(prog_mode == 'n'){
@@ -696,7 +702,7 @@ int main(void)
 					}
 
 				}
-
+			printf("The transfer took %f seconds \n", (float)(clock()-start_time)/(float)CLOCKS_PER_SEC);
 			fclose(fp);
 
 			}
